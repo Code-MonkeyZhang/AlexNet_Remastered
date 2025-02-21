@@ -59,10 +59,15 @@ class ImageNetDataset(Dataset):
     def _load_class_mapping(self):
         """Load class names and create class to index mapping"""
         train_dir = os.path.join(self.data_root, 'train')
+        # 获取所有 WordNet ID（目录名）
         self.classes = sorted([d for d in os.listdir(train_dir) 
-                             if os.path.isdir(os.path.join(train_dir, d))])
+                            if os.path.isdir(os.path.join(train_dir, d))])
+        
+        # 确保正好有1000个类别
+        assert len(self.classes) == 1000, f"Found {len(self.classes)} classes, expected 1000"
+        
+        # 创建从 WordNet ID 到 0-999 索引的映射
         self.class_to_idx = {cls: i for i, cls in enumerate(self.classes)}
-        logger.info(f"Found {len(self.classes)} classes")
 
     def _load_training_set(self):
         """Load training images and labels"""
@@ -82,41 +87,36 @@ class ImageNetDataset(Dataset):
                     self.labels.append(self.class_to_idx[class_name])
 
     def _load_validation_set(self):
-        """Load validation images and labels"""
+        """Load validation images based on directory structure"""
         val_dir = os.path.join(self.data_root, 'val')
-        val_anno_file = os.path.join(self.base_dir, 'ImageSets/CLS-LOC/val.txt')
+        logger.info(f"Loading validation images from: {val_dir}")
         
         if not os.path.exists(val_dir):
             raise FileNotFoundError(f"Validation directory not found: {val_dir}")
-        if not os.path.exists(val_anno_file):
-            raise FileNotFoundError(f"Validation annotation file not found: {val_anno_file}")
+
+        count = 0
+        # 遍历验证集目录中的类别子目录
+        for class_name in tqdm(sorted(os.listdir(val_dir)), desc="Loading validation classes"):
+            class_path = os.path.join(val_dir, class_name)
+            if not os.path.isdir(class_path):
+                continue
+                
+            # 使用与训练集相同的类别索引
+            if class_name not in self.class_to_idx:
+                logger.warning(f"Warning: validation folder {class_name} not found in training classes")
+                continue
+                
+            class_idx = self.class_to_idx[class_name]
             
-        # Read validation annotations
-        logger.info("Loading validation annotations...")
-        val_labels = {}
-        with open(val_anno_file, 'r') as f:
-            for line in f:
-                # Format: ILSVRC2012_val_00000001 1
-                img_name, label = line.strip().split()
-                img_name = img_name + '.JPEG'
-                # Convert 1-based label to 0-based
-                label = int(label) - 1
-                val_labels[img_name] = label
-        
-        # Load validation images
-        logger.info("Loading validation images...")
-        for img_name in tqdm(sorted(os.listdir(val_dir)), desc="Loading validation images"):
-            if self._is_valid_image(img_name):
-                if img_name in val_labels:
-                    label = val_labels[img_name]
-                    if 0 <= label < len(self.classes):
-                        img_path = os.path.join(val_dir, img_name)
-                        self.images.append(img_path)
-                        self.labels.append(label)
-                    else:
-                        logger.warning(f"Invalid label {label} for image {img_name}")
-                else:
-                    logger.warning(f"No annotation found for image {img_name}")
+            # 加载该类别下的所有图片
+            for img_name in os.listdir(class_path):
+                if self._is_valid_image(img_name):
+                    img_path = os.path.join(class_path, img_name)
+                    self.images.append(img_path)
+                    self.labels.append(class_idx)
+                    count += 1
+            
+        logger.info(f"Found {count} validation images in {len(set(self.labels))} classes")
 
     def _is_valid_image(self, filename):
         """Check if a file is a valid image"""
@@ -126,7 +126,6 @@ class ImageNetDataset(Dataset):
         return len(self.images)
 
     def __getitem__(self, idx):
-        """Get a single item from the dataset"""
         try:
             img_path = self.images[idx]
             label = self.labels[idx]
@@ -138,11 +137,13 @@ class ImageNetDataset(Dataset):
                 image = self.transform(image)
             
             return image, label
-            
+        
         except Exception as e:
             logger.error(f"Error loading image {img_path}: {str(e)}")
-            # Return a random valid image instead
-            return self[torch.randint(len(self), (1,)).item()]
+            # 返回一个全0 tensor及一个特殊标签(-1)以便上层可以过滤
+            dummy_tensor = torch.zeros(3, 224, 224)
+            return dummy_tensor, -1
+
 
 def create_data_loaders(data_root, train_transform, val_transform, 
                        batch_size=128, num_workers=4):
