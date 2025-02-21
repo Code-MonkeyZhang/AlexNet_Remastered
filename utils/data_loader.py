@@ -1,85 +1,79 @@
 # utils/data_loader.py
 
 import os
-import json
+import pickle
+import logging
 from PIL import Image
 import torch
-from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms
+from torch.utils.data import Dataset
 from tqdm import tqdm
-import logging
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class ImageNetDataset(Dataset):
-    """
-    ImageNet dataset loader
-    Directory structure:
-    ILSVRC/
-    ├── Data/CLS-LOC/
-    │   ├── train/
-    │   └── val/
-    └── ImageSets/CLS-LOC/
-        ├── train_cls.txt
-        └── val.txt
-    """
-    def __init__(self, data_root, transform=None, train=True):
+    def __init__(self, data_root, transform=None, train=True, cache_file=None):
         """
         Args:
-            data_root: ILSVRC/Data/CLS-LOC path
-            transform: transforms to apply to images
-            train: whether to load training or validation set
+            data_root: ILSVRC/Data/CLS-LOC 路径
+            transform: 对图像进行的预处理
+            train: 是否加载训练集
+            cache_file: 缓存文件路径，如果为 None 则默认存放在 data_root 下
         """
         self.data_root = data_root
         self.transform = transform
         self.train = train
         
-        # Get ILSVRC base directory
+        # 获取 ILSVRC 的基础目录
         self.base_dir = os.path.dirname(os.path.dirname(data_root))
         
         logger.info(f"Initializing ImageNet {'training' if train else 'validation'} dataset")
         logger.info(f"Data root: {data_root}")
         logger.info(f"Base directory: {self.base_dir}")
         
-        # Load class mapping
+        # 加载类别映射
         self._load_class_mapping()
         
-        # Load images and labels
-        self.images = []
-        self.labels = []
+        # 如果没有提供缓存文件路径，则默认生成一个
+        if cache_file is None:
+            cache_file = os.path.join(self.data_root, f'{"train" if train else "val"}_cache.pkl')
+        self.cache_file = cache_file
         
-        if self.train:
-            self._load_training_set()
+        # 尝试加载缓存
+        if os.path.exists(self.cache_file):
+            logger.info(f"Loading cached dataset from {self.cache_file}")
+            with open(self.cache_file, 'rb') as f:
+                self.images, self.labels = pickle.load(f)
         else:
-            self._load_validation_set()
+            # 如果没有缓存则遍历目录加载数据
+            self.images = []
+            self.labels = []
             
-        logger.info(f"Dataset loaded with {len(self.images)} images")
+            if self.train:
+                self._load_training_set()
+            else:
+                self._load_validation_set()
+            
+            logger.info(f"Dataset loaded with {len(self.images)} images")
+            # 保存缓存
+            with open(self.cache_file, 'wb') as f:
+                pickle.dump((self.images, self.labels), f)
 
     def _load_class_mapping(self):
-        """Load class names and create class to index mapping"""
         train_dir = os.path.join(self.data_root, 'train')
         # 获取所有 WordNet ID（目录名）
         self.classes = sorted([d for d in os.listdir(train_dir) 
-                            if os.path.isdir(os.path.join(train_dir, d))])
-        
-        # 确保正好有1000个类别
+                               if os.path.isdir(os.path.join(train_dir, d))])
         assert len(self.classes) == 1000, f"Found {len(self.classes)} classes, expected 1000"
-        
-        # 创建从 WordNet ID 到 0-999 索引的映射
         self.class_to_idx = {cls: i for i, cls in enumerate(self.classes)}
 
     def _load_training_set(self):
-        """Load training images and labels"""
         train_dir = os.path.join(self.data_root, 'train')
-        
         logger.info("Loading training images...")
         for class_name in tqdm(self.classes, desc="Loading training classes"):
             class_dir = os.path.join(train_dir, class_name)
             if not os.path.isdir(class_dir):
                 logger.warning(f"Class directory not found: {class_dir}")
                 continue
-                
             for img_name in os.listdir(class_dir):
                 if self._is_valid_image(img_name):
                     img_path = os.path.join(class_dir, img_name)
@@ -87,39 +81,25 @@ class ImageNetDataset(Dataset):
                     self.labels.append(self.class_to_idx[class_name])
 
     def _load_validation_set(self):
-        """Load validation images based on directory structure"""
         val_dir = os.path.join(self.data_root, 'val')
         logger.info(f"Loading validation images from: {val_dir}")
-        
         if not os.path.exists(val_dir):
             raise FileNotFoundError(f"Validation directory not found: {val_dir}")
-
-        count = 0
-        # 遍历验证集目录中的类别子目录
         for class_name in tqdm(sorted(os.listdir(val_dir)), desc="Loading validation classes"):
             class_path = os.path.join(val_dir, class_name)
             if not os.path.isdir(class_path):
                 continue
-                
-            # 使用与训练集相同的类别索引
             if class_name not in self.class_to_idx:
                 logger.warning(f"Warning: validation folder {class_name} not found in training classes")
                 continue
-                
             class_idx = self.class_to_idx[class_name]
-            
-            # 加载该类别下的所有图片
             for img_name in os.listdir(class_path):
                 if self._is_valid_image(img_name):
                     img_path = os.path.join(class_path, img_name)
                     self.images.append(img_path)
                     self.labels.append(class_idx)
-                    count += 1
-            
-        logger.info(f"Found {count} validation images in {len(set(self.labels))} classes")
 
     def _is_valid_image(self, filename):
-        """Check if a file is a valid image"""
         return filename.lower().endswith(('.jpeg', '.jpg', '.png', '.JPEG'))
 
     def __len__(self):
@@ -129,21 +109,15 @@ class ImageNetDataset(Dataset):
         try:
             img_path = self.images[idx]
             label = self.labels[idx]
-            
             with Image.open(img_path) as img:
                 image = img.convert('RGB')
-            
             if self.transform:
                 image = self.transform(image)
-            
             return image, label
-        
         except Exception as e:
             logger.error(f"Error loading image {img_path}: {str(e)}")
-            # 返回一个全0 tensor及一个特殊标签(-1)以便上层可以过滤
             dummy_tensor = torch.zeros(3, 224, 224)
             return dummy_tensor, -1
-
 
 def create_data_loaders(data_root, train_transform, val_transform, 
                        batch_size=128, num_workers=4):
