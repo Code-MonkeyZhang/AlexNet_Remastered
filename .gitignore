@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyTorch model files
+*.pth
+*.pt
+*.ckpt
+*.pkl
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# Data
+data/
+datasets/
+ImageNet/
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.tif
+*.h5
+*.tfrecords
+
+# Logs and outputs
+logs/
+runs/
+outputs/
+tensorboard/
+*.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
